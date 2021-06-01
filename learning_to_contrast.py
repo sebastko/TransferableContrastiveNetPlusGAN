@@ -29,7 +29,7 @@ parser.add_argument('--preprocessing', action='store_true', default=False,
 parser.add_argument('--standardization', action='store_true', default=False)
 parser.add_argument('--validation', action='store_true', default=False, help='enable cross validation mode')
 
-parser.add_argument('--gpu', default='3', type=str, help='index of GPU to use')
+parser.add_argument('--gpu', default='0', type=str, help='index of GPU to use')
 parser.add_argument('--exp_idx', default='', type=str, help='exp idx')
 parser.add_argument('--manualSeed', type=int, default=4683, help='manual seed')
 parser.add_argument('--resume', type=str, help='the model to resume')
@@ -151,17 +151,73 @@ def train():
             re_batch_labels[batch_labels == support_labels[i]] = i
         re_batch_labels = torch.LongTensor(re_batch_labels)
 
-        bce = nn.BCELoss().cuda()
-        mse = nn.MSELoss().cuda()
-        one_hot_labels = torch.zeros(opt.batch_size, train_class_num).scatter_(1, re_batch_labels.view(-1, 1), 1).cuda()
-        sim_labels = dataset.sim[re_batch_labels].cuda()
+        real = torch.ones((opt.batch_size,1)).cuda()
+        criterions = {
+            'real_examples': nn.BCELoss(weight=real).cuda(),
+            'fake_examples': nn.BCELoss(weight=(1 - real)).cuda()
+        }
+        all_class_num = relations.shape[-1]
+        all_one_hot_labels = torch.zeros(opt.batch_size, all_class_num).scatter_(1, re_batch_labels.view(-1, 1), 1).cuda()
+        all_sim_labels = dataset.sim_full[re_batch_labels].cuda()
+        
+        one_hot_labels = {
+            'seen_classes': all_one_hot_labels[:, :train_class_num],
+            'unseen_classes': all_one_hot_labels[:, train_class_num:]
+        }
+        sim_labels = {
+            'seen_classes': all_sim_labels[:, :train_class_num],
+            'unseen_classes': all_sim_labels[:, train_class_num:]
+        }
+        relations_dict = {
+            'seen_classes': relations[:, :train_class_num],
+            'unseen_classes': relations[:, train_class_num:]
+        }
 
-        relation_train = relations[:, :train_class_num]
-        relation_test = relations[:, train_class_num:]
+        alphas = {
+            # Real examples
+            'real_examples': {
+                # Seen classes: distriminative and transferable losses
+                'seen_classes': {
+                    'L_D': 1.0,
+                    'L_T': 0.0
+                },
 
-        loss1 = bce(relation_train, one_hot_labels)
-        loss2 = bce(relation_test, sim_labels)
-        loss = loss1 + opt.REG_W_LAMBDA * loss2
+                # Unseen classes
+                'unseen_classes': {
+                    'L_D': 0.0,
+                    'L_T': 0.01
+                }
+            },
+
+            # Fake examples
+            'fake_examples': {
+                # Seen classes: distriminative and transferable losses
+                'seen_classes': {
+                    'L_D': 0.0,
+                    'L_T': 0.0
+                },
+
+                # Unseen classes
+                'unseen_classes': {
+                    'L_D': 0.0,
+                    'L_T': 0.0
+                }
+            },
+        }
+
+        loss = 0
+        for example_source in alphas:
+            for class_target in alphas[example_source]:
+                alpha_L_D = alphas[example_source][class_target]['L_D']
+                alpha_L_T = alphas[example_source][class_target]['L_T'] 
+                bce = criterions[example_source] 
+                loss_D = bce(relations_dict[class_target], one_hot_labels[class_target])
+                loss_T = bce(relations_dict[class_target], sim_labels[class_target])
+                loss += alpha_L_D * loss_D + alpha_L_T * loss_T
+
+        #loss1 = bce(relation_train, one_hot_labels)
+        #loss2 = bce(relation_test, sim_labels)
+        #loss = loss1 + opt.REG_W_LAMBDA * loss2
 
         reset_grad(nets)
 
@@ -203,7 +259,7 @@ def train():
 
         if it % opt.disp_interval == 0 and it:
             log_text = 'Iter-{}; Loss: {:.3f}; ZSL: {:.3f}; H: {:.3f}; S: {:.3f}; U: {:.3f};  ' \
-                .format(it, loss.data[0], acc, H, S, U)
+                .format(it, loss.data, acc, H, S, U)
             print(log_text)
             with open(log_dir, 'a') as f:
                 f.write(log_text + '\n')

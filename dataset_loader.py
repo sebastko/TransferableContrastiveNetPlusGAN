@@ -144,6 +144,20 @@ class DATA_LOADER(object):
         similar = similar/ tmp1
         self.sim = torch.from_numpy(similar).float()
         
+        LASSO_full = models.Ridge(alpha= 1)
+        # LASSO = models.Lasso(alpha= 1)
+        LASSO_full.fit(self.attribute.T,self.attribute.T)
+        similar_full = LASSO_full.coef_
+        assert similar_full.shape == (50, 50)
+        similar_full[similar_full<1e-3] = 0
+        tmp = np.sum(similar_full, axis=1)
+        tmp1= np.tile(tmp, (similar_full.shape[1],1)).transpose()
+        similar_full = similar_full/ tmp1
+        self.sim_full = torch.from_numpy(similar_full).float()
+        # the most important 'quarter' of the sim_full matrix is real->unseen, and the original 'sim' here
+        # works better, so let's copy the original sim here.
+        self.sim_full[:self.sim.shape[0], self.sim.shape[0]:] = self.sim
+        
         LASSO1 = models.Ridge(alpha= 1)
         # LASSO = models.Lasso(alpha= 1)
         LASSO1.fit(self.train_att.transpose(),self.test_att.transpose())
