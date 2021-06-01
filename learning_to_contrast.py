@@ -13,9 +13,13 @@ import argparse
 import os
 import glob
 import random
+import json
+import copy
 
 from dataset_loader import FeatDataLayer, DATA_LOADER
 from models import _AttributeNet, _RelationNet, _param
+
+from clswgan import generate_batch, load_generator
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', default='APY', help='FLO')
@@ -39,6 +43,8 @@ parser.add_argument('--disp_interval', type=int, default=500)
 parser.add_argument('--save_interval', type=int, default=10000)
 parser.add_argument('--evl_interval', type=int, default=1000)
 
+parser.add_argument('--netG_path', default='models/wgan_G_model_1e4.pt')
+
 opt = parser.parse_args()
 print(opt)
 os.environ['CUDA_VISIBLE_DEVICES'] = opt.gpu
@@ -59,7 +65,7 @@ torch.manual_seed(opt.manualSeed)
 torch.cuda.manual_seed_all(opt.manualSeed)
 
 
-def train():
+def train(exp_id, alphas):
     param = _param()
     dataset = DATA_LOADER(opt)
     param.X_dim = dataset.feature_dim
@@ -79,7 +85,7 @@ def train():
     print(Rnet)
 
     exp_info = 'GBU_{}'.format(opt.dataset)
-    exp_params = 'Rls{}'.format(opt.REG_W_LAMBDA)
+    exp_params = 'exp_{}'.format(exp_id)
 
     out_dir = 'Result/{:s}'.format(exp_info)
     out_subdir = 'Result/{:s}/{:s}'.format(exp_info, exp_params)
@@ -89,6 +95,10 @@ def train():
         os.mkdir(out_dir)
     if not os.path.exists(out_subdir):
         os.mkdir(out_subdir)
+    
+    print(alphas)
+    with open(f'{out_subdir}/alphas.json', 'w') as fout:
+        json.dump(alphas, fout, indent=True)
 
     cprint(" The output dictionary is {}".format(out_subdir), 'red')
     log_dir = out_subdir + '/log_{:s}_{}.txt'.format(exp_info, opt.exp_idx)
@@ -123,22 +133,28 @@ def train():
     print
     dataset.sim[1]
 
+    # CLSWGAN generator for creating synthetic data.
+    netG = load_generator(opt.netG_path)
+    print(netG)
+
     for it in range(start_step, 50000 + 1):
         blobs = data_layer.forward()
         batch_feats = blobs['data']  # image data
         batch_labels = blobs['labels'].astype(int)  # class labels
 
+        synth_feats, synth_y = generate_batch(netG, batch_feats.shape[0], dataset.test_att)
+
         support_attr = dataset.attribute[all_class].cuda()
         class_num = all_class.shape[0]
 
-        batch_images = torch.from_numpy(batch_feats).cuda()
+        batch_images = torch.cat((torch.from_numpy(batch_feats).cuda(), synth_feats), dim=0)
 
         batch_ext = batch_images.unsqueeze(0).repeat(class_num, 1, 1)
         batch_ext = torch.transpose(batch_ext, 0, 1)
 
         # forward
         semantic_proto = APnet(support_attr)
-        semantic_proto_ext = semantic_proto.unsqueeze(0).repeat(opt.batch_size, 1, 1)
+        semantic_proto_ext = semantic_proto.unsqueeze(0).repeat(2 * opt.batch_size, 1, 1)
         # relation_pairs = torch.cat([semantic_proto_ext, batch_ext],2).view(-1,dataset.feature_dim + dataset.feature_dim)
         relation_pairs = semantic_proto_ext * batch_ext
         relations = Rnet(relation_pairs).view(-1, class_num)
@@ -149,15 +165,19 @@ def train():
         train_class_num = support_labels.shape[0]
         for i in range(train_class_num):
             re_batch_labels[batch_labels == support_labels[i]] = i
-        re_batch_labels = torch.LongTensor(re_batch_labels)
+        re_batch_labels = torch.cat((torch.from_numpy(re_batch_labels), synth_y.cpu() + train_class_num), dim=0)
+        # do the same for test labels?
 
-        real = torch.ones((opt.batch_size,1)).cuda()
+        # First half of the batch comes from real data, the second half is synthetic.
+        real = torch.zeros((2 * opt.batch_size, 1)).cuda()
+        real[:opt.batch_size,:] = 1
+
         criterions = {
             'real_examples': nn.BCELoss(weight=real).cuda(),
             'fake_examples': nn.BCELoss(weight=(1 - real)).cuda()
         }
         all_class_num = relations.shape[-1]
-        all_one_hot_labels = torch.zeros(opt.batch_size, all_class_num).scatter_(1, re_batch_labels.view(-1, 1), 1).cuda()
+        all_one_hot_labels = torch.zeros(2 * opt.batch_size, all_class_num).scatter_(1, re_batch_labels.view(-1, 1), 1).cuda()
         all_sim_labels = dataset.sim_full[re_batch_labels].cuda()
         
         one_hot_labels = {
@@ -171,38 +191,6 @@ def train():
         relations_dict = {
             'seen_classes': relations[:, :train_class_num],
             'unseen_classes': relations[:, train_class_num:]
-        }
-
-        alphas = {
-            # Real examples
-            'real_examples': {
-                # Seen classes: distriminative and transferable losses
-                'seen_classes': {
-                    'L_D': 1.0,
-                    'L_T': 0.0
-                },
-
-                # Unseen classes
-                'unseen_classes': {
-                    'L_D': 0.0,
-                    'L_T': 0.01
-                }
-            },
-
-            # Fake examples
-            'fake_examples': {
-                # Seen classes: distriminative and transferable losses
-                'seen_classes': {
-                    'L_D': 0.0,
-                    'L_T': 0.0
-                },
-
-                # Unseen classes
-                'unseen_classes': {
-                    'L_D': 0.0,
-                    'L_T': 0.0
-                }
-            },
         }
 
         loss = 0
@@ -464,4 +452,50 @@ def label2mat(labels, y_dim):
 
 
 if __name__ == "__main__":
-    train()
+    alphas = {
+        # Real examples
+        'real_examples': {
+            # Seen classes: distriminative and transferable losses
+            'seen_classes': {
+                'L_D': 1.0,
+                'L_T': 0.0
+            },
+
+            # Unseen classes
+            'unseen_classes': {
+                'L_D': 0.0,
+                'L_T': 0.01
+            }
+        },
+
+        # Fake examples
+        'fake_examples': {
+            # Seen classes: distriminative and transferable losses
+            'seen_classes': {
+                'L_D': 0.0,
+                'L_T': 0.0
+            },
+
+            # Unseen classes
+            'unseen_classes': {
+                'L_D': 0.0,
+                'L_T': 0.0
+            }
+        },
+    }
+
+    values = [0.0, 0.0, 0.0, 0.001, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.5, 0.64, 1.0]
+
+    for i in range(20):
+
+        a = copy.deepcopy(alphas)
+
+        exp_id = 'alphas'
+        for k1 in alphas:
+            for k2 in alphas[k1]:
+                for k3 in alphas[k1][k2]:
+                    if alphas[k1][k2][k3] == 0.0:
+                        a[k1][k2][k3] = random.choice(values)
+                    exp_id += f'_{a[k1][k2][k3]}'
+        
+        train(exp_id, a)
