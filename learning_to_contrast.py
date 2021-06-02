@@ -84,7 +84,7 @@ def train(exp_id, alphas):
     Rnet.apply(weights_init)
     print(Rnet)
 
-    exp_info = 'GBU_{}'.format(opt.dataset)
+    exp_info = 'GBU_{}_{}'.format(opt.dataset, 'val' if opt.validation else 'tst')
     exp_params = 'exp_{}'.format(exp_id)
 
     out_dir = 'Result/{:s}'.format(exp_info)
@@ -137,7 +137,7 @@ def train(exp_id, alphas):
     netG = load_generator(opt.netG_path)
     print(netG)
 
-    for it in range(start_step, 50000 + 1):
+    for it in range(start_step, 10000 + 1):
         blobs = data_layer.forward()
         batch_feats = blobs['data']  # image data
         batch_labels = blobs['labels'].astype(int)  # class labels
@@ -486,7 +486,7 @@ if __name__ == "__main__":
 
     values = [0.0, 0.0, 0.0, 0.001, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.5, 0.64, 1.0]
 
-    for i in range(20):
+    for i in range(10):
 
         a = copy.deepcopy(alphas)
 
