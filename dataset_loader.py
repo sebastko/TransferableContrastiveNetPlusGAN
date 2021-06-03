@@ -118,16 +118,27 @@ class DATA_LOADER(object):
         else:
             all_train_feature = torch.from_numpy(feature[train_loc]).float()
             all_train_label = torch.from_numpy(label[train_loc]).long()
+
+            rng = np.random.RandomState(12312)
+            rng.shuffle(all_train_feature)
+            rng = np.random.RandomState(12312)
+            rng.shuffle(all_train_label)
+
             self.test_unseen_feature = torch.from_numpy(feature[val_unseen_loc]).float()
             self.test_unseen_label = torch.from_numpy(label[val_unseen_loc]).long()
 
             # TODO: make gin configurable?
             seen_val_ratio = 0.2
+            
             train_N = int(all_train_feature.shape[0] * (1-seen_val_ratio))
             self.train_feature, self.train_label = all_train_feature[:train_N, :], all_train_label[:train_N]
             self.test_seen_feature, self.test_seen_label = all_train_feature[train_N:, :], all_train_label[train_N:]
 
-            assert sorted(np.unique(self.train_label)) == sorted(np.unique(self.test_seen_label))
+            train_classes = sorted(np.unique(self.train_label))
+            test_seen_classes = sorted(np.unique(self.test_seen_label))
+            print(f'train: {train_N}, test seen: {self.test_seen_feature.shape[0]}, test unseen: {self.test_unseen_feature.shape[0]}')
+            print(f'train classes: {train_classes} ({len(train_classes)}); test_seen classes: {test_seen_classes} ({len(test_seen_classes)})')
+            assert train_classes == test_seen_classes, f'train: {train_classes} ({len(train_classes)}); test_seen: {test_seen_classes} ({len(test_seen_classes)})'
 
         self.seenclasses = torch.from_numpy(np.unique(self.train_label.numpy()))
         self.unseenclasses = torch.from_numpy(np.unique(self.test_unseen_label.numpy()))

@@ -46,6 +46,7 @@ parser.add_argument('--save_interval', type=int, default=10000)
 parser.add_argument('--evl_interval', type=int, default=1000)
 
 parser.add_argument('--netG_path', default='models/wgan_G_model_1e4.pt')
+parser.add_argument('--iterations', type=int, default=50000)
 
 opt = parser.parse_args()
 print(opt)
@@ -87,7 +88,7 @@ def train(exp_id, alphas):
     print(Rnet)
 
     exp_info = 'GBU_{}_{}'.format(opt.dataset, 'val' if opt.validation else 'tst')
-    exp_params = 'exp_{}_long'.format(exp_id)
+    exp_params = 'exp_{}_it{}'.format(exp_id, opt.iterations)
 
     out_dir = 'Result/{:s}'.format(exp_info)
     out_subdir = 'Result/{:s}/{:s}'.format(exp_info, exp_params)
@@ -139,7 +140,7 @@ def train(exp_id, alphas):
     netG = load_generator(opt.netG_path)
     print(netG)
 
-    for it in range(start_step, 50000 + 1):
+    for it in range(start_step, opt.iterations + 1):
         blobs = data_layer.forward()
         batch_feats = blobs['data']  # image data
         batch_labels = blobs['labels'].astype(int)  # class labels
@@ -456,19 +457,21 @@ def label2mat(labels, y_dim):
 
 
 if __name__ == "__main__":
+    values = [0.0, 0.0, 0.0, 0.001, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.5, 0.64, 1.0]
+    small_values = [0.0, 0.001, 0.01, 0.02, 0.04, 0.08]
     alphas = {
         # Real examples
         'real_examples': {
             # Seen classes: distriminative and transferable losses
             'seen_classes': {
-                'L_D': 1.0,
-                'L_T': 0.0
+                'L_D': [0.5, 1.0, 1.0],
+                'L_T': small_values
             },
 
             # Unseen classes
             'unseen_classes': {
-                'L_D': 0.0,
-                'L_T': 0.01
+                'L_D': values,
+                'L_T': small_values
             }
         },
 
@@ -476,45 +479,21 @@ if __name__ == "__main__":
         'fake_examples': {
             # Seen classes: distriminative and transferable losses
             'seen_classes': {
-                'L_D': 0.0,
-                'L_T': 0.0
+                'L_D': values,
+                'L_T': small_values
             },
 
             # Unseen classes
             'unseen_classes': {
-                'L_D': 0.0,
-                'L_T': 0.0
+                'L_D': values,
+                'L_T': small_values
             }
         },
     }
 
-    alphas = {
-        "real_examples": {
-        "seen_classes": {
-        "L_D": 1.0,
-        "L_T": 0.0
-        },
-        "unseen_classes": {
-        "L_D": 0.0,
-        "L_T": 0.01
-        }
-        },
-        "fake_examples": {
-        "seen_classes": {
-        "L_D": 0.0,
-        "L_T": 0.0
-        },
-        "unseen_classes": {
-        "L_D": 0.0,
-        "L_T": 0.0
-        }
-        }
-    }
-
-    values = [0.0, 0.0, 0.0, 0.001, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.5, 0.64, 1.0]
 
     now = datetime.now()
-    date_time = now.strftime("%Y-%m-%d_%H:%M:%S")
+    date_time = now.strftime("%Y-%m-%d_%H-%M-%S")
     with open(f'experiments-{date_time}-{"val" if opt.validation else "tst"}.csv', 'w', newline='') as csvfile:
         fieldnames = [
             'r.s.L_D', 'r.s.L_T', 'r.u.L_D', 'r.u.L_T',
@@ -525,7 +504,7 @@ if __name__ == "__main__":
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
-        for i in range(1):
+        for i in range(10):
 
             a = copy.deepcopy(alphas)
 
@@ -533,21 +512,20 @@ if __name__ == "__main__":
             for k1 in alphas:
                 for k2 in alphas[k1]:
                     for k3 in alphas[k1][k2]:
-                        #if alphas[k1][k2][k3] == 0.0:
-                        #    a[k1][k2][k3] = random.choice(values)
+                        a[k1][k2][k3] = random.choice(alphas[k1][k2][k3])
                         exp_id += f'_{a[k1][k2][k3]}'
             
             result_zsl, result_gzsl, subdir = train(exp_id, a)
 
             writer.writerow({
-                'r.s.L_D': alphas['real_examples']['seen_classes']['L_D'],
-                'r.s.L_T': alphas['real_examples']['seen_classes']['L_T'],
-                'r.u.L_D': alphas['real_examples']['unseen_classes']['L_D'],
-                'r.u.L_T': alphas['real_examples']['unseen_classes']['L_T'],
-                'f.s.L_D': alphas['fake_examples']['seen_classes']['L_D'],
-                'f.s.L_T': alphas['fake_examples']['seen_classes']['L_T'],
-                'f.u.L_D': alphas['fake_examples']['unseen_classes']['L_D'],
-                'f.u.L_T': alphas['fake_examples']['unseen_classes']['L_T'],
+                'r.s.L_D': a['real_examples']['seen_classes']['L_D'],
+                'r.s.L_T': a['real_examples']['seen_classes']['L_T'],
+                'r.u.L_D': a['real_examples']['unseen_classes']['L_D'],
+                'r.u.L_T': a['real_examples']['unseen_classes']['L_T'],
+                'f.s.L_D': a['fake_examples']['seen_classes']['L_D'],
+                'f.s.L_T': a['fake_examples']['seen_classes']['L_T'],
+                'f.u.L_D': a['fake_examples']['unseen_classes']['L_D'],
+                'f.u.L_T': a['fake_examples']['unseen_classes']['L_T'],
                 'best_zsl': result_zsl.best_acc,
                 'best_zsl_it': result_zsl.best_iter,
                 'best_H': result_gzsl.best_acc,
