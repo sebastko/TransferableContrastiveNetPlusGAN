@@ -48,6 +48,8 @@ parser.add_argument('--evl_interval', type=int, default=1000)
 parser.add_argument('--netG_path', default='models/wgan_G_model_1e4.pt')
 parser.add_argument('--iterations', type=int, default=50000)
 
+parser.add_argument('--alphas', default=None)
+
 opt = parser.parse_args()
 print(opt)
 os.environ['CUDA_VISIBLE_DEVICES'] = opt.gpu
@@ -455,82 +457,100 @@ def label2mat(labels, y_dim):
         c[idx, d] = 1
     return c
 
+def get_exp_id(alphas):
+    exp_id = 'alphas'
+    for k1 in alphas:
+        for k2 in alphas[k1]:
+            for k3 in alphas[k1][k2]:
+                exp_id += f'_{alphas[k1][k2][k3]}'
+    return exp_id
+
 
 if __name__ == "__main__":
-    values = [0.0, 0.0, 0.0, 0.001, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.5, 0.64, 1.0]
-    small_values = [0.0, 0.001, 0.01, 0.02, 0.04, 0.08]
-    alphas = {
-        # Real examples
-        'real_examples': {
-            # Seen classes: distriminative and transferable losses
-            'seen_classes': {
-                'L_D': [0.5, 1.0, 1.0],
-                'L_T': small_values
+
+    if opt.alphas is not None:
+        print(f'Loading alphas from {opt.alphas}')
+        with open(opt.alphas) as fin:
+            a = json.load(fin)
+    
+        exp_id = get_exp_id(a)
+        train(exp_id, a)
+        
+    else:
+        print('Performing hyper-param search...')
+
+        values = [0.0, 0.0, 0.0, 0.001, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.5, 0.64, 1.0]
+        small_values = [0.0, 0.001, 0.01, 0.02, 0.04, 0.08]
+        alphas = {
+            # Real examples
+            'real_examples': {
+                # Seen classes: distriminative and transferable losses
+                'seen_classes': {
+                    'L_D': [0.5, 1.0, 1.0],
+                    'L_T': small_values
+                },
+
+                # Unseen classes
+                'unseen_classes': {
+                    'L_D': values,
+                    'L_T': small_values
+                }
             },
 
-            # Unseen classes
-            'unseen_classes': {
-                'L_D': values,
-                'L_T': small_values
-            }
-        },
+            # Fake examples
+            'fake_examples': {
+                # Seen classes: distriminative and transferable losses
+                'seen_classes': {
+                    'L_D': values,
+                    'L_T': small_values
+                },
 
-        # Fake examples
-        'fake_examples': {
-            # Seen classes: distriminative and transferable losses
-            'seen_classes': {
-                'L_D': values,
-                'L_T': small_values
+                # Unseen classes
+                'unseen_classes': {
+                    'L_D': values,
+                    'L_T': small_values
+                }
             },
+        }
 
-            # Unseen classes
-            'unseen_classes': {
-                'L_D': values,
-                'L_T': small_values
-            }
-        },
-    }
+        now = datetime.now()
+        date_time = now.strftime("%Y-%m-%d_%H-%M-%S")
+        with open(f'experiments-{date_time}-{"val" if opt.validation else "tst"}.csv', 'w', newline='') as csvfile:
+            fieldnames = [
+                'r.s.L_D', 'r.s.L_T', 'r.u.L_D', 'r.u.L_T',
+                'f.s.L_D', 'f.s.L_T', 'f.u.L_D', 'f.u.L_T',
+                'best_zsl', 'best_zsl_it',
+                'best_H', 'best_H_S', 'best_H_U', 'best_H_it',
+                'path']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
 
+            for i in range(50):
 
-    now = datetime.now()
-    date_time = now.strftime("%Y-%m-%d_%H-%M-%S")
-    with open(f'experiments-{date_time}-{"val" if opt.validation else "tst"}.csv', 'w', newline='') as csvfile:
-        fieldnames = [
-            'r.s.L_D', 'r.s.L_T', 'r.u.L_D', 'r.u.L_T',
-            'f.s.L_D', 'f.s.L_T', 'f.u.L_D', 'f.u.L_T',
-            'best_zsl', 'best_zsl_it',
-            'best_H', 'best_H_S', 'best_H_U', 'best_H_it',
-            'path']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
+                a = copy.deepcopy(alphas)
 
-        for i in range(10):
+                for k1 in alphas:
+                    for k2 in alphas[k1]:
+                        for k3 in alphas[k1][k2]:
+                            a[k1][k2][k3] = random.choice(alphas[k1][k2][k3])
+                
+                exp_id = get_exp_id(a)
+                result_zsl, result_gzsl, subdir = train(exp_id, a)
 
-            a = copy.deepcopy(alphas)
-
-            exp_id = 'alphas'
-            for k1 in alphas:
-                for k2 in alphas[k1]:
-                    for k3 in alphas[k1][k2]:
-                        a[k1][k2][k3] = random.choice(alphas[k1][k2][k3])
-                        exp_id += f'_{a[k1][k2][k3]}'
-            
-            result_zsl, result_gzsl, subdir = train(exp_id, a)
-
-            writer.writerow({
-                'r.s.L_D': a['real_examples']['seen_classes']['L_D'],
-                'r.s.L_T': a['real_examples']['seen_classes']['L_T'],
-                'r.u.L_D': a['real_examples']['unseen_classes']['L_D'],
-                'r.u.L_T': a['real_examples']['unseen_classes']['L_T'],
-                'f.s.L_D': a['fake_examples']['seen_classes']['L_D'],
-                'f.s.L_T': a['fake_examples']['seen_classes']['L_T'],
-                'f.u.L_D': a['fake_examples']['unseen_classes']['L_D'],
-                'f.u.L_T': a['fake_examples']['unseen_classes']['L_T'],
-                'best_zsl': result_zsl.best_acc,
-                'best_zsl_it': result_zsl.best_iter,
-                'best_H': result_gzsl.best_acc,
-                'best_H_S': result_gzsl.best_acc_S_T,
-                'best_H_U': result_gzsl.best_acc_U_T,
-                'best_H_it': result_gzsl.best_iter,
-                'path': subdir
-            })
+                writer.writerow({
+                    'r.s.L_D': a['real_examples']['seen_classes']['L_D'],
+                    'r.s.L_T': a['real_examples']['seen_classes']['L_T'],
+                    'r.u.L_D': a['real_examples']['unseen_classes']['L_D'],
+                    'r.u.L_T': a['real_examples']['unseen_classes']['L_T'],
+                    'f.s.L_D': a['fake_examples']['seen_classes']['L_D'],
+                    'f.s.L_T': a['fake_examples']['seen_classes']['L_T'],
+                    'f.u.L_D': a['fake_examples']['unseen_classes']['L_D'],
+                    'f.u.L_T': a['fake_examples']['unseen_classes']['L_T'],
+                    'best_zsl': result_zsl.best_acc,
+                    'best_zsl_it': result_zsl.best_iter,
+                    'best_H': result_gzsl.best_acc,
+                    'best_H_S': result_gzsl.best_acc_S_T,
+                    'best_H_U': result_gzsl.best_acc_U_T,
+                    'best_H_it': result_gzsl.best_iter,
+                    'path': subdir
+                })
