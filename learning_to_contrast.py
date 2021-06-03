@@ -15,6 +15,8 @@ import glob
 import random
 import json
 import copy
+import csv
+from datetime import datetime
 
 from dataset_loader import FeatDataLayer, DATA_LOADER
 from models import _AttributeNet, _RelationNet, _param
@@ -85,7 +87,7 @@ def train(exp_id, alphas):
     print(Rnet)
 
     exp_info = 'GBU_{}_{}'.format(opt.dataset, 'val' if opt.validation else 'tst')
-    exp_params = 'exp_{}'.format(exp_id)
+    exp_params = 'exp_{}_long'.format(exp_id)
 
     out_dir = 'Result/{:s}'.format(exp_info)
     out_subdir = 'Result/{:s}/{:s}'.format(exp_info, exp_params)
@@ -137,7 +139,7 @@ def train(exp_id, alphas):
     netG = load_generator(opt.netG_path)
     print(netG)
 
-    for it in range(start_step, 10000 + 1):
+    for it in range(start_step, 50000 + 1):
         blobs = data_layer.forward()
         batch_feats = blobs['data']  # image data
         batch_labels = blobs['labels'].astype(int)  # class labels
@@ -251,6 +253,8 @@ def train(exp_id, alphas):
             print(log_text)
             with open(log_dir, 'a') as f:
                 f.write(log_text + '\n')
+    
+    return result, result_gzsl, out_subdir
 
 
 def save_model(it, APnet, Rnet, random_seed, log, fout):
@@ -484,18 +488,71 @@ if __name__ == "__main__":
         },
     }
 
+    alphas = {
+        "real_examples": {
+        "seen_classes": {
+        "L_D": 1.0,
+        "L_T": 0.0
+        },
+        "unseen_classes": {
+        "L_D": 0.0,
+        "L_T": 0.01
+        }
+        },
+        "fake_examples": {
+        "seen_classes": {
+        "L_D": 0.0,
+        "L_T": 0.0
+        },
+        "unseen_classes": {
+        "L_D": 0.0,
+        "L_T": 0.0
+        }
+        }
+    }
+
     values = [0.0, 0.0, 0.0, 0.001, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.5, 0.64, 1.0]
 
-    for i in range(10):
+    now = datetime.now()
+    date_time = now.strftime("%Y-%m-%d_%H:%M:%S")
+    with open(f'experiments-{date_time}-{"val" if opt.validation else "tst"}.csv', 'w', newline='') as csvfile:
+        fieldnames = [
+            'r.s.L_D', 'r.s.L_T', 'r.u.L_D', 'r.u.L_T',
+            'f.s.L_D', 'f.s.L_T', 'f.u.L_D', 'f.u.L_T',
+            'best_zsl', 'best_zsl_it',
+            'best_H', 'best_H_S', 'best_H_U', 'best_H_it',
+            'path']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
 
-        a = copy.deepcopy(alphas)
+        for i in range(1):
 
-        exp_id = 'alphas'
-        for k1 in alphas:
-            for k2 in alphas[k1]:
-                for k3 in alphas[k1][k2]:
-                    if alphas[k1][k2][k3] == 0.0:
-                        a[k1][k2][k3] = random.choice(values)
-                    exp_id += f'_{a[k1][k2][k3]}'
-        
-        train(exp_id, a)
+            a = copy.deepcopy(alphas)
+
+            exp_id = 'alphas'
+            for k1 in alphas:
+                for k2 in alphas[k1]:
+                    for k3 in alphas[k1][k2]:
+                        #if alphas[k1][k2][k3] == 0.0:
+                        #    a[k1][k2][k3] = random.choice(values)
+                        exp_id += f'_{a[k1][k2][k3]}'
+            
+            result_zsl, result_gzsl, subdir = train(exp_id, a)
+
+            writer.writerow({
+                'r.s.L_D': alphas['real_examples']['seen_classes']['L_D'],
+                'r.s.L_T': alphas['real_examples']['seen_classes']['L_T'],
+                'r.u.L_D': alphas['real_examples']['unseen_classes']['L_D'],
+                'r.u.L_T': alphas['real_examples']['unseen_classes']['L_T'],
+                'f.s.L_D': alphas['fake_examples']['seen_classes']['L_D'],
+                'f.s.L_T': alphas['fake_examples']['seen_classes']['L_T'],
+                'f.u.L_D': alphas['fake_examples']['unseen_classes']['L_D'],
+                'f.u.L_T': alphas['fake_examples']['unseen_classes']['L_T'],
+                'best_zsl': result_zsl.best_acc,
+                'best_zsl_it': result_zsl.best_iter,
+                'best_H': result_gzsl.best_acc,
+                'best_H_S': result_gzsl.best_acc_S_T,
+                'best_H_U': result_gzsl.best_acc_U_T,
+                'best_H_it': result_gzsl.best_iter,
+                'path': subdir
+            })
