@@ -2,3 +2,5 @@
 .vscode
 Result
 __pycache__
+
+models/*.pt
