@@ -116,10 +116,18 @@ class DATA_LOADER(object):
                 self.test_seen_feature = torch.from_numpy(feature[test_seen_loc]).float()
                 self.test_seen_label = torch.from_numpy(label[test_seen_loc]).long()
         else:
-            self.train_feature = torch.from_numpy(feature[train_loc]).float()
-            self.train_label = torch.from_numpy(label[train_loc]).long()
+            all_train_feature = torch.from_numpy(feature[train_loc]).float()
+            all_train_label = torch.from_numpy(label[train_loc]).long()
             self.test_unseen_feature = torch.from_numpy(feature[val_unseen_loc]).float()
             self.test_unseen_label = torch.from_numpy(label[val_unseen_loc]).long()
+
+            # TODO: make gin configurable?
+            seen_val_ratio = 0.2
+            train_N = int(all_train_feature.shape[0] * (1-seen_val_ratio))
+            self.train_feature, self.train_label = all_train_feature[:train_N, :], all_train_label[:train_N]
+            self.test_seen_feature, self.test_seen_label = all_train_feature[train_N:, :], all_train_label[train_N:]
+
+            assert sorted(np.unique(self.train_label)) == sorted(np.unique(self.test_seen_label))
 
         self.seenclasses = torch.from_numpy(np.unique(self.train_label.numpy()))
         self.unseenclasses = torch.from_numpy(np.unique(self.test_unseen_label.numpy()))
@@ -143,6 +151,20 @@ class DATA_LOADER(object):
         tmp1= np.tile(tmp, (similar.shape[1],1)).transpose()
         similar = similar/ tmp1
         self.sim = torch.from_numpy(similar).float()
+        
+        LASSO_full = models.Ridge(alpha= 1)
+        # LASSO = models.Lasso(alpha= 1)
+        all_att = np.concatenate((self.train_att, self.test_att), axis=0)
+        LASSO_full.fit(all_att.T,all_att.T)
+        similar_full = LASSO_full.coef_
+        similar_full[similar_full<1e-3] = 0
+        tmp = np.sum(similar_full, axis=1)
+        tmp1= np.tile(tmp, (similar_full.shape[1],1)).transpose()
+        similar_full = similar_full/ tmp1
+        self.sim_full = torch.from_numpy(similar_full).float()
+        # the most important 'quarter' of the sim_full matrix is real->unseen, and the original 'sim' here
+        # works better, so let's copy the original sim here.
+        self.sim_full[:self.sim.shape[0], self.sim.shape[0]:] = self.sim
         
         LASSO1 = models.Ridge(alpha= 1)
         # LASSO = models.Lasso(alpha= 1)
